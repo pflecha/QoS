@@ -1,0 +1,54 @@
+Param(
+    $ControllerIP      = '192.168.0.101'
+,   $UserName          = 'admin'
+,   $Password          = 'password'
+,   $Volume            = 'bcnds0_dr'
+,   $VSM               = 'VS1'
+,   $QOSMaxThroughput  = '10IOPS'
+)
+Import-Module DataOntap
+
+Connect-NcController $ControllerIP -Credential (New-Object System.Management.Automation.PSCredential($UserName,
+    (ConvertTo-SecureString $Password -AsPlainText -Force)))
+
+# Test for FlexClone
+$fctemp = Get-NcVol -Template 
+Initialize-NcObjectProperty $fctemp VolumeCloneAttributes
+Initialize-NcObjectProperty $fctemp.VolumeCloneAttributes VolumeCloneParentAttributes
+$fctemp.VolumeCloneAttributes.VolumeCloneParentAttributes.Name = $Volume 
+$fctemp.Vserver = $VSM
+$fctemp.Name = "testfailoverClone*"
+   
+if (Get-NcVol -Query $fctemp) 
+{
+    return;
+}
+else 
+{
+    $Attributes = Get-NcVol -Template
+    Initialize-NcObjectProperty $Attributes VolumeQosAttributes
+
+    $Query = Get-NcVol -Template
+    $Query.Vserver = $VSM
+    $Query.Name = "${Volume}"
+
+    if (Get-NcSnapmirror -Destination $Volume  -DestinationVserver $VSM)
+    {
+        $QOSPolicyGroup = Get-NcQosPolicyGroup -Name "srm_${vsm}" -Vserver $VSM
+        if (!$QOSPolicyGroup)
+        {
+            New-NcQosPolicyGroup -Name "srm_${VSM}" -Vserver $VSM -MaxThroughput $QOSMaxThroughput
+        }
+        else
+        {
+            $QOSPolicyGroup | Set-NcQosPolicyGroup -MaxThroughput $QOSMaxThroughput
+        }
+        $Attributes.VolumeQosAttributes.PolicyGroupName = "srm_${VSM}" 
+        Update-NcVol -Attributes $Attributes -Query $Query
+    }
+    else
+    {
+        $Attributes.VolumeQosAttributes.PolicyGroupName = "none"
+        Update-NcVol -Attributes $Attributes -Query $Query
+    }
+}
